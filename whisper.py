@@ -2,8 +2,8 @@ import tkinter as tk
 from tkinter import messagebox
 import wikipediaapi
 import torch
+import scipy.io.wavfile as wavfile  # 追加
 from whisperspeech.pipeline import Pipeline
-import torchaudio
 from dotenv import load_dotenv
 import os
 import re
@@ -23,7 +23,7 @@ def check_cuda():
 
 # WhisperSpeechのパイプライン初期化
 def init_pipeline():
-    return Pipeline(s2a_ref='collabora/whisperspeech:s2a-q4-tiny-en+pl.model')
+    return Pipeline(s2a_ref='collabora/whisperspeech:s2a-q4-small-en+pl.model')
 
 # ファイル名に使用できない文字を除去する関数
 def sanitize_filename(filename):
@@ -67,28 +67,34 @@ class WikiAudioApp:
         self.article = wiki.page(article_title)
 
         if self.article.exists():
-            self.text_to_audio(self.article.text, article_title)
+            # 記事全文を取得
+            full_text = self.get_full_text(self.article)
+            self.text_to_audio(full_text, article_title)
         else:
             messagebox.showerror("Error", "Article not found!")
 
+    def get_full_text(self, page):
+        """
+        ページ内の全セクションを再帰的に取得し、全文をテキストとして返す。
+        """
+        def recurse_sections(sections, text):
+            for section in sections:
+                text += section.title + "\n" + section.text + "\n"
+                text = recurse_sections(section.sections, text)
+            return text
+
+        # ページ本体のテキスト + 全セクションのテキストを取得
+        full_text = page.text + "\n"
+        return recurse_sections(page.sections, full_text)
+
     def text_to_audio(self, text, article_title):
-        # WhisperSpeechでテキストを音声に変換
-        result = self.pipe.generate(text)
-
-        # CUDAテンソルが含まれている場合はCPUに移動
-        result = result.cpu()
-
         # 記事名をファイル名に変換して、使用できない文字を除去
         sanitized_title = sanitize_filename(article_title)
         audio_file = os.path.join("out", f"{sanitized_title}.wav")
 
-        # 出力ディレクトリが存在しない場合は作成
-        ensure_output_directory("out")
+        self.pipe.generate_to_file(audio_file, text)
 
-        # 音声データをWAVファイルとして保存
-        torchaudio.save(audio_file, result, sample_rate=22050)
-
-        print(f"Audio saved as {audio_file}")
+        print(f"Audio file '{audio_file}' has been saved.")
         messagebox.showinfo("Success", f"Article has been converted to audio and saved as {audio_file}")
 
 # アプリケーションの起動
