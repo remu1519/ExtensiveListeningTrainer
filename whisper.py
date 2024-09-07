@@ -95,21 +95,26 @@ class WikiAudioApp:
         # 概要の音声化
         self.text_to_audio(sentences, audio_file)
 
-    def process_sections(self, sections, article_title):
+    def process_sections(self, sections, article_title, base_idx=2, prefix=""):
         # 出力ディレクトリを作成
         sanitized_title = sanitize_filename(article_title)
         base_dir = os.path.join("out", sanitized_title)
         ensure_output_directory(base_dir)
 
-        for idx, section in enumerate(sections, start=2):  # 概要は「01_」なので、セクションは「02_」から始める
+        for idx, section in enumerate(sections, start=base_idx):  # 概要は「01_」なので、セクションは「02_」から始める
             section_title = sanitize_filename(section.title)
-            section_dir = os.path.join(base_dir, f"{str(idx).zfill(2)}_{section_title}.wav")  # プレフィックスを追加
+            section_dir = os.path.join(base_dir, f"{prefix}{str(idx).zfill(2)}_{section_title}.wav")  # プレフィックスを追加
 
             # セクションのテキストを一文ごとに分割
             sentences = split_text_into_sentences(section.text)
 
             # セクション内の全センテンスを結合して1つの音声ファイルにする
             self.text_to_audio(sentences, section_dir)
+
+            # 再帰的に子セクションも処理し、子セクションごとに独立したファイルを作成
+            if section.sections:
+                new_prefix = f"{prefix}{str(idx).zfill(2)}_{section_title}_"  # 親セクションの番号を継承しつつ、子セクションにはさらに番号を追加
+                self.process_sections(section.sections, article_title, base_idx=1, prefix=new_prefix)
 
     def text_to_audio(self, sentences, output_file):
         combined = AudioSegment.empty()
