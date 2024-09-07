@@ -34,114 +34,125 @@ def ensure_output_directory(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-# テキストを一文ごとに分割する関数（改行で分割、!?は除外）
+# テキストを一文ごとに分割する関数
 def split_text_into_sentences(text):
     sentences = re.split(r'(?:\n|(?<=[.!?]))+', text.strip())  # 改行または文末記号で分割
     return [sentence for sentence in sentences if sentence]
 
-# GUIの設定
+# ファイルパスを生成する関数
+def create_audio_filepath(base_dir, prefix, section_title):
+    sanitized_title = sanitize_filename(section_title)
+    return os.path.join(base_dir, f"{prefix}_{sanitized_title}.wav")
+
+# 音声ファイル生成の処理
+def generate_audio(pipe, sentences, output_file):
+    combined_audio = AudioSegment.empty()
+    silence = AudioSegment.silent(duration=400)  # 0.4秒の無音
+
+    for idx, sentence in enumerate(sentences):
+        if not sentence.strip():
+            continue
+
+        temp_file = os.path.join("out", "temp", f"temp_{idx}.wav")
+        ensure_output_directory(os.path.dirname(temp_file))
+
+        try:
+            # 各文を音声化して一時ファイルに保存
+            pipe.generate_to_file(temp_file, sentence)
+            audio_segment = AudioSegment.from_wav(temp_file)
+            combined_audio += audio_segment + silence
+
+            # 処理が終わった一時ファイルを削除
+            os.remove(temp_file)
+        except Exception as e:
+            print(f"Error generating audio for sentence {idx}: {e}")
+            raise e
+
+    # 結合した音声を保存
+    combined_audio.export(output_file, format="wav")
+    print(f"Audio file '{output_file}' has been saved.")
+
+# Wikipediaから記事を取得し音声化するクラス
 class WikiAudioApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Wikipedia to Audio")
 
-        # 記事名入力欄
-        self.title_label = tk.Label(root, text="Wikipedia Article Title:")
+        self.init_gui()
+        self.init_pipeline()
+
+    # GUIの初期化
+    def init_gui(self):
+        self.title_label = tk.Label(self.root, text="Wikipedia Article Title:")
         self.title_label.pack()
 
-        self.title_entry = tk.Entry(root, width=50)
+        self.title_entry = tk.Entry(self.root, width=50)
         self.title_entry.pack()
 
-        # ボタン
-        self.search_button = tk.Button(root, text="Convert Article to Audio", command=self.convert_article_to_audio)
+        self.search_button = tk.Button(self.root, text="Convert Article to Audio", command=self.convert_article_to_audio)
         self.search_button.pack()
 
-        # WhisperSpeechのパイプラインを初期化
+    # パイプラインの初期化
+    def init_pipeline(self):
         check_cuda()
         self.pipe = init_pipeline()
-        self.article = None
 
+    # 記事タイトルを取得し、処理を開始
     def convert_article_to_audio(self):
         article_title = self.title_entry.get().strip()
         if not article_title:
-            messagebox.showerror("Error", "Article title cannot be empty!")
+            self.show_error("Article title cannot be empty!")
             return
 
-        # Wikipediaの記事を検索する際に、適切なユーザーエージェントを設定
+        article = self.fetch_wikipedia_article(article_title)
+        if article:
+            self.process_article(article, article_title)
+        else:
+            self.show_error("Article not found!")
+
+    # Wikipediaから記事を取得
+    def fetch_wikipedia_article(self, article_title):
         user_agent = f"Extensive Listening Trainer/1.0 ({CONTACT_EMAIL})"
         wiki = wikipediaapi.Wikipedia('en', headers={'User-Agent': user_agent})
-        
-        self.article = wiki.page(article_title)
+        article = wiki.page(article_title)
 
-        if self.article.exists():
-            # 概要を最初に処理
-            self.process_summary(self.article.summary, article_title)
-            
-            # セクションごとに音声ファイルを作成
-            self.process_sections(self.article.sections, article_title)
-        else:
-            messagebox.showerror("Error", "Article not found!")
+        if article.exists():
+            return article
+        return None
 
-    def process_summary(self, summary, article_title):
-        # 概要（イントロダクション）の処理
-        sanitized_title = sanitize_filename(article_title)
-        base_dir = os.path.join("out", sanitized_title)
+    # エラーメッセージ表示
+    def show_error(self, message):
+        messagebox.showerror("Error", message)
+
+    # 記事全体の処理
+    def process_article(self, article, article_title):
+        base_dir = os.path.join("out", sanitize_filename(article_title))
         ensure_output_directory(base_dir)
 
-        # 概要を一文ごとに分割
+        # 概要を処理
+        self.process_summary(article.summary, base_dir)
+
+        # セクションごとに処理
+        self.process_sections(article.sections, base_dir, prefix="02")
+
+    # 記事の概要を処理
+    def process_summary(self, summary, base_dir):
         sentences = split_text_into_sentences(summary)
-        audio_file = os.path.join(base_dir, "01_summary.wav")  # プレフィックス「01_」を追加
+        audio_file = os.path.join(base_dir, "01_summary.wav")
+        generate_audio(self.pipe, sentences, audio_file)
 
-        # 概要の音声化
-        self.text_to_audio(sentences, audio_file)
+    # セクションごとに処理
+    def process_sections(self, sections, base_dir, prefix):
+        for idx, section in enumerate(sections, start=1):
+            section_prefix = f"{prefix}_{str(idx).zfill(2)}"
+            section_filepath = create_audio_filepath(base_dir, section_prefix, section.title)
 
-    def process_sections(self, sections, article_title, base_idx=2, prefix=""):
-        # 出力ディレクトリを作成
-        sanitized_title = sanitize_filename(article_title)
-        base_dir = os.path.join("out", sanitized_title)
-        ensure_output_directory(base_dir)
-
-        for idx, section in enumerate(sections, start=base_idx):  # 概要は「01_」なので、セクションは「02_」から始める
-            section_title = sanitize_filename(section.title)
-            section_dir = os.path.join(base_dir, f"{prefix}{str(idx).zfill(2)}_{section_title}.wav")  # プレフィックスを追加
-
-            # セクションのテキストを一文ごとに分割
             sentences = split_text_into_sentences(section.text)
+            generate_audio(self.pipe, sentences, section_filepath)
 
-            # セクション内の全センテンスを結合して1つの音声ファイルにする
-            self.text_to_audio(sentences, section_dir)
-
-            # 再帰的に子セクションも処理し、子セクションごとに独立したファイルを作成
+            # 子セクションの処理
             if section.sections:
-                new_prefix = f"{prefix}{str(idx).zfill(2)}_{section_title}_"  # 親セクションの番号を継承しつつ、子セクションにはさらに番号を追加
-                self.process_sections(section.sections, article_title, base_idx=1, prefix=new_prefix)
-
-    def text_to_audio(self, sentences, output_file):
-        combined = AudioSegment.empty()
-        silence = AudioSegment.silent(duration=400)  # 0.4秒の無音を作成
-
-        for idx, sentence in enumerate(sentences):
-            if not sentence.strip():
-                continue
-
-            temp_file = os.path.join("out", "temp", f"temp_{idx}.wav")
-            ensure_output_directory(os.path.dirname(temp_file))
-
-            try:
-                # 各文を音声化して一時ファイルに保存
-                self.pipe.generate_to_file(temp_file, sentence)
-                audio_segment = AudioSegment.from_wav(temp_file)
-                combined += audio_segment + silence  # 各センテンスを結合し、0.2秒の無音を追加
-
-                # 処理が終わった一時ファイルを削除
-                os.remove(temp_file)
-            except Exception as e:
-                print(f"Error generating audio for sentence {idx}: {e}")
-                messagebox.showerror("Error", f"Error generating audio for sentence {idx}: {e}")
-
-        # 結合した音声を保存
-        combined.export(output_file, format="wav")
-        print(f"Audio file '{output_file}' has been saved.")
+                self.process_sections(section.sections, base_dir, section_prefix)
 
 # アプリケーションの起動
 root = tk.Tk()
