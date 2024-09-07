@@ -34,9 +34,9 @@ def ensure_output_directory(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-# テキストを一文ごとに分割する関数
+# テキストを一文ごとに分割する関数（改行で分割、!?は除外）
 def split_text_into_sentences(text):
-    sentences = re.split(r'(?<=[.]) +', text.strip())
+    sentences = re.split(r'(?:\n|(?<=[.!?]))+', text.strip())  # 改行または文末記号で分割
     return [sentence for sentence in sentences if sentence]
 
 # GUIの設定
@@ -44,9 +44,6 @@ class WikiAudioApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Wikipedia to Audio")
-
-        # 中断フラグ
-        self.stop_flag = False
 
         # 記事名入力欄
         self.title_label = tk.Label(root, text="Wikipedia Article Title:")
@@ -59,27 +56,16 @@ class WikiAudioApp:
         self.search_button = tk.Button(root, text="Convert Article to Audio", command=self.convert_article_to_audio)
         self.search_button.pack()
 
-        self.stop_button = tk.Button(root, text="Stop", command=self.stop_processing)
-        self.stop_button.pack()
-
         # WhisperSpeechのパイプラインを初期化
         check_cuda()
         self.pipe = init_pipeline()
         self.article = None
-
-    def stop_processing(self):
-        # 中断フラグを立てる
-        self.stop_flag = True
-        print("Processing stopped.")
 
     def convert_article_to_audio(self):
         article_title = self.title_entry.get().strip()
         if not article_title:
             messagebox.showerror("Error", "Article title cannot be empty!")
             return
-
-        # 中断フラグを初期化
-        self.stop_flag = False
 
         # Wikipediaの記事を検索する際に、適切なユーザーエージェントを設定
         user_agent = f"Extensive Listening Trainer/1.0 ({CONTACT_EMAIL})"
@@ -97,9 +83,6 @@ class WikiAudioApp:
             messagebox.showerror("Error", "Article not found!")
 
     def process_summary(self, summary, article_title):
-        if self.stop_flag:
-            return
-
         # 概要（イントロダクション）の処理
         sanitized_title = sanitize_filename(article_title)
         base_dir = os.path.join("out", sanitized_title)
@@ -113,18 +96,12 @@ class WikiAudioApp:
         self.text_to_audio(sentences, audio_file)
 
     def process_sections(self, sections, article_title):
-        if self.stop_flag:
-            return
-
         # 出力ディレクトリを作成
         sanitized_title = sanitize_filename(article_title)
         base_dir = os.path.join("out", sanitized_title)
         ensure_output_directory(base_dir)
 
         for idx, section in enumerate(sections, start=2):  # 概要は「01_」なので、セクションは「02_」から始める
-            if self.stop_flag:
-                return
-
             section_title = sanitize_filename(section.title)
             section_dir = os.path.join(base_dir, f"{str(idx).zfill(2)}_{section_title}.wav")  # プレフィックスを追加
 
@@ -136,11 +113,9 @@ class WikiAudioApp:
 
     def text_to_audio(self, sentences, output_file):
         combined = AudioSegment.empty()
+        silence = AudioSegment.silent(duration=400)  # 0.4秒の無音を作成
 
         for idx, sentence in enumerate(sentences):
-            if self.stop_flag:
-                return
-
             if not sentence.strip():
                 continue
 
@@ -151,7 +126,10 @@ class WikiAudioApp:
                 # 各文を音声化して一時ファイルに保存
                 self.pipe.generate_to_file(temp_file, sentence)
                 audio_segment = AudioSegment.from_wav(temp_file)
-                combined += audio_segment  # 各センテンスを結合
+                combined += audio_segment + silence  # 各センテンスを結合し、0.2秒の無音を追加
+
+                # 処理が終わった一時ファイルを削除
+                os.remove(temp_file)
             except Exception as e:
                 print(f"Error generating audio for sentence {idx}: {e}")
                 messagebox.showerror("Error", f"Error generating audio for sentence {idx}: {e}")
