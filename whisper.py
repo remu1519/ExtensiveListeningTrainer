@@ -7,19 +7,18 @@ from dotenv import load_dotenv
 import os
 from pydub import AudioSegment
 import torch
+import threading
 
 # .envファイルから環境変数をロード
 load_dotenv()
 
-# 環境変数から連絡先を取得
 CONTACT_EMAIL = os.getenv("CONTACT_EMAIL")
 
-# GPU（CUDA）の利用可否を確認
+# GPU（CUDA）の利用確認
 def check_cuda():
     if not torch.cuda.is_available():
         raise BaseException("This application requires CUDA. Please run this on a machine with a GPU.")
-    else:
-        print("CUDA is available. Proceeding with the pipeline.")
+    print("CUDA is available. Proceeding with the pipeline.")
 
 # WhisperSpeechのパイプライン初期化
 def init_pipeline():
@@ -104,6 +103,11 @@ class WikiAudioApp:
             self.show_error("Article title cannot be empty!")
             return
 
+        # バックグラウンドで音声変換処理を実行
+        threading.Thread(target=self.run_in_background, args=(article_title,)).start()
+
+    # バックグラウンドで記事の処理を行う
+    def run_in_background(self, article_title):
         article = self.fetch_wikipedia_article(article_title)
         if article:
             self.process_article(article, article_title)
